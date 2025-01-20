@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 import zipfile
 from ipaddress import ip_network
@@ -200,7 +201,7 @@ class DownloadContestSubmissions(APIView):
         problem_ids = contest.problem_set.all().values_list("id", "_id")
         id2display_id = {k[0]: k[1] for k in problem_ids}
         ac_map = {k[0]: False for k in problem_ids}
-        submissions = Submission.objects.filter(contest=contest, result=JudgeStatus.ACCEPTED).order_by("-create_time")
+        submissions = Submission.objects.filter(contest=contest).order_by("-create_time")
         user_ids = submissions.values_list("user_id", flat=True)
         users = User.objects.filter(id__in=user_ids)
         path = f"/tmp/{rand_str()}.zip"
@@ -208,18 +209,34 @@ class DownloadContestSubmissions(APIView):
             for user in users:
                 if user.is_admin_role() and exclude_admin:
                     continue
-                user_ac_map = copy.deepcopy(ac_map)
+                # user_ac_map = copy.deepcopy(ac_map)
                 user_submissions = submissions.filter(user_id=user.id)
                 for submission in user_submissions:
-                    problem_id = submission.problem_id
-                    if user_ac_map[problem_id]:
-                        continue
-                    file_name = f"{user.username}_{id2display_id[submission.problem_id]}.txt"
+                    # problem_id = submission.problem_id
+                    # if user_ac_map[problem_id]:
+                    #     continue
+                    file_name = f"{user.username}_{id2display_id[submission.problem_id]}.json"
                     compression = zipfile.ZIP_DEFLATED
+                    submission_data = {
+                        "id": submission.id,
+                        "contest_id": submission.contest_id,
+                        "problem_id": submission.problem_id,
+                        "create_time": submission.create_time.isoformat(),
+                        "user_id": submission.user_id,
+                        "username": submission.username,
+                        "code": submission.code,
+                        "result": submission.result,
+                        "info": submission.info,
+                        "language": submission.language,
+                        "shared": submission.shared,
+                        "statistic_info": submission.statistic_info,
+                        "ip": submission.ip,
+                        "date": submission.date.isoformat()
+                    }
                     zip_file.writestr(zinfo_or_arcname=f"{file_name}",
-                                      data=submission.code,
+                                      data=json.dumps(submission_data,indent=4),
                                       compress_type=compression)
-                    user_ac_map[problem_id] = True
+                    # user_ac_map[problem_id] = True
         return path
 
     def get(self, request):
