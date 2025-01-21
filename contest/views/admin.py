@@ -230,8 +230,7 @@ class DownloadContestSubmissions(APIView):
                         "language": submission.language,
                         "shared": submission.shared,
                         "statistic_info": submission.statistic_info,
-                        "ip": submission.ip,
-                        "date": submission.date.isoformat()
+                        "ip": submission.ip
                     }
                     zip_file.writestr(zinfo_or_arcname=f"{file_name}",
                                       data=json.dumps(submission_data,indent=4),
