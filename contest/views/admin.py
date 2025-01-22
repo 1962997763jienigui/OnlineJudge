@@ -1,11 +1,13 @@
 import copy
 import json
 import os
+import sys
 import zipfile
 from ipaddress import ip_network
 
 import dateutil.parser
 from django.http import FileResponse
+import logging
 
 from account.decorators import check_contest_permission, ensure_created_by
 from account.models import User
@@ -20,6 +22,7 @@ from ..serializers import (ContestAnnouncementSerializer, ContestAdminSerializer
                            CreateConetestSeriaizer, CreateContestAnnouncementSerializer,
                            EditConetestSeriaizer, EditContestAnnouncementSerializer,
                            ACMContesHelperSerializer, )
+logger = logging.getLogger(__name__)
 
 
 class ContestAPI(APIView):
@@ -202,41 +205,49 @@ class DownloadContestSubmissions(APIView):
         id2display_id = {k[0]: k[1] for k in problem_ids}
         ac_map = {k[0]: False for k in problem_ids}
         submissions = Submission.objects.filter(contest=contest).order_by("-create_time")
+        logger.exception(f"=====submissions:{len(submissions)},===={submissions}")
         user_ids = submissions.values_list("user_id", flat=True)
         users = User.objects.filter(id__in=user_ids)
-        path = f"/tmp/{rand_str()}.zip"
-        with zipfile.ZipFile(path, "w") as zip_file:
-            for user in users:
-                if user.is_admin_role() and exclude_admin:
-                    continue
-                # user_ac_map = copy.deepcopy(ac_map)
-                user_submissions = submissions.filter(user_id=user.id)
-                for submission in user_submissions:
-                    # problem_id = submission.problem_id
-                    # if user_ac_map[problem_id]:
-                    #     continue
-                    file_name = f"{user.username}_{id2display_id[submission.problem_id]}.json"
-                    compression = zipfile.ZIP_DEFLATED
-                    submission_data = {
-                        "id": submission.id,
-                        "contest_id": submission.contest_id,
-                        "problem_id": submission.problem_id,
-                        "create_time": submission.create_time.isoformat(),
-                        "user_id": submission.user_id,
-                        "username": submission.username,
-                        "code": submission.code,
-                        "result": submission.result,
-                        "info": submission.info,
-                        "language": submission.language,
-                        "shared": submission.shared,
-                        "statistic_info": submission.statistic_info,
-                        "ip": submission.ip
-                    }
-                    zip_file.writestr(zinfo_or_arcname=f"{file_name}",
-                                      data=json.dumps(submission_data,indent=4),
-                                      compress_type=compression)
+        # path = f"/tmp/{rand_str()}.zip"
+        # with zipfile.ZipFile(path, "w") as zip_file:
+
+        all_submissions = []
+        for user in users:
+            if user.is_admin_role() and exclude_admin:
+                continue
+            # user_ac_map = copy.deepcopy(ac_map)
+            user_submissions = submissions.filter(user_id=user.id)
+            for submission in user_submissions:
+                # problem_id = submission.problem_id
+                # if user_ac_map[problem_id]:
+                #     continue
+                # file_name = f"{user.username}_{id2display_id[submission.problem_id]}.json"
+                # compression = zipfile.ZIP_DEFLATED
+                submission_data = {
+                    "id": submission.id,
+                    "contest_id": submission.contest_id,
+                    "problem_id": submission.problem_id,
+                    "create_time": submission.create_time.isoformat(),
+                    "user_id": submission.user_id,
+                    "username": submission.username,
+                    "code": submission.code,
+                    "result": submission.result,
+                    "info": submission.info,
+                    "language": submission.language,
+                    "shared": submission.shared,
+                    "statistic_info": submission.statistic_info,
+                    "ip": submission.ip
+                }
+                all_submissions.append(submission_data)
+                # zip_file.writestr(zinfo_or_arcname=f"{file_name}",
+                #                   data=json.dumps(submission_data,indent=4),
+                #                   compress_type=compression)
                     # user_ac_map[problem_id] = True
-        return path
+        json_path = f"/tmp/{rand_str()}.json"
+        with open(json_path, "w") as json_file:
+            json.dump(all_submissions, json_file, indent=4)
+        return json_path
+        # return path
 
     def get(self, request):
         contest_id = request.GET.get("contest_id")
@@ -249,6 +260,7 @@ class DownloadContestSubmissions(APIView):
             return self.error("Contest does not exist")
 
         exclude_admin = request.GET.get("exclude_admin") == "1"
+        sys.stdout.write(f"=====request:{contest_id},{exclude_admin}")
         zip_path = self._dump_submissions(contest, exclude_admin)
         delete_files.send_with_options(args=(zip_path,), delay=300_000)
         resp = FileResponse(open(zip_path, "rb"))
