@@ -1,13 +1,13 @@
 import copy
 import json
 import os
+import shutil
 import sys
 import zipfile
 from ipaddress import ip_network
 
 import dateutil.parser
 from django.http import FileResponse
-import logging
 
 from account.decorators import check_contest_permission, ensure_created_by
 from account.models import User
@@ -22,7 +22,6 @@ from ..serializers import (ContestAnnouncementSerializer, ContestAdminSerializer
                            CreateConetestSeriaizer, CreateContestAnnouncementSerializer,
                            EditConetestSeriaizer, EditContestAnnouncementSerializer,
                            ACMContesHelperSerializer, )
-logger = logging.getLogger(__name__)
 
 
 class ContestAPI(APIView):
@@ -205,28 +204,27 @@ class DownloadContestSubmissions(APIView):
         id2display_id = {k[0]: k[1] for k in problem_ids}
         ac_map = {k[0]: False for k in problem_ids}
         submissions = Submission.objects.filter(contest=contest).order_by("-create_time")
-        logger.exception(f"=====submissions:{len(submissions)},===={submissions}")
         user_ids = submissions.values_list("user_id", flat=True)
         users = User.objects.filter(id__in=user_ids)
-        # path = f"/tmp/{rand_str()}.zip"
-        # with zipfile.ZipFile(path, "w") as zip_file:
 
-        all_submissions = []
+        # 创建一个临时目录存储每个用户的 JSON 文件
+        temp_dir = f"/tmp/{rand_str()}"
+        os.makedirs(temp_dir, exist_ok=True)
+
         for user in users:
             if user.is_admin_role() and exclude_admin:
                 continue
-            # user_ac_map = copy.deepcopy(ac_map)
+
+            # 获取该用户的所有提交记录
             user_submissions = submissions.filter(user_id=user.id)
+            user_submission_data = []
+
             for submission in user_submissions:
-                # problem_id = submission.problem_id
-                # if user_ac_map[problem_id]:
-                #     continue
-                # file_name = f"{user.username}_{id2display_id[submission.problem_id]}.json"
-                # compression = zipfile.ZIP_DEFLATED
                 submission_data = {
                     "id": submission.id,
                     "contest_id": submission.contest_id,
                     "problem_id": submission.problem_id,
+                    "problem_display_id": id2display_id[submission.problem_id],
                     "create_time": submission.create_time.isoformat(),
                     "user_id": submission.user_id,
                     "username": submission.username,
@@ -238,16 +236,24 @@ class DownloadContestSubmissions(APIView):
                     "statistic_info": submission.statistic_info,
                     "ip": submission.ip
                 }
-                all_submissions.append(submission_data)
-                # zip_file.writestr(zinfo_or_arcname=f"{file_name}",
-                #                   data=json.dumps(submission_data,indent=4),
-                #                   compress_type=compression)
-                    # user_ac_map[problem_id] = True
-        json_path = f"/tmp/{rand_str()}.json"
-        with open(json_path, "w") as json_file:
-            json.dump(all_submissions, json_file, indent=4)
-        return json_path
-        # return path
+                user_submission_data.append(submission_data)
+
+            # 将该用户的所有提交记录写入一个 JSON 文件
+            user_file_path = os.path.join(temp_dir, f"{user.username}.json")
+            with open(user_file_path, "w") as user_file:
+                json.dump(user_submission_data, user_file, indent=4)
+
+        # 将所有用户的 JSON 文件打包成 ZIP 文件
+        zip_path = f"/tmp/{rand_str()}.zip"
+        with zipfile.ZipFile(zip_path, "w") as zip_file:
+            for root, _, files in os.walk(temp_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    zip_file.write(file_path, arcname=file)
+
+        # 删除临时目录
+        shutil.rmtree(temp_dir)
+        return zip_path
 
     def get(self, request):
         contest_id = request.GET.get("contest_id")
@@ -260,7 +266,6 @@ class DownloadContestSubmissions(APIView):
             return self.error("Contest does not exist")
 
         exclude_admin = request.GET.get("exclude_admin") == "1"
-        sys.stdout.write(f"=====request:{contest_id},{exclude_admin}")
         zip_path = self._dump_submissions(contest, exclude_admin)
         delete_files.send_with_options(args=(zip_path,), delay=300_000)
         resp = FileResponse(open(zip_path, "rb"))
